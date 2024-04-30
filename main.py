@@ -3,6 +3,7 @@ import os
 import pandas as pd
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
 
 
 class Specimen:
@@ -25,8 +26,9 @@ class Specimen:
         return f"Specimen(percentage_elongation={self.percentage_elongation[:3]}, force={self.force[:3]}, area={self.area}), stretch={self.stretch[:3]}"
 
     def _get_stretch(self):
+        print(self.percentage_elongation)
         return [
-            self.percentage_elongation[i] / 100 + 1
+            self.percentage_elongation[i] / 100 + 1 if self.percentage_elongation[i] > 0 else 0
             for i in range(len(self.percentage_elongation))
         ]
 
@@ -54,10 +56,10 @@ read_xlsx_files(".")
 assert len(specimens) == 2, "Only 2 specimens should be found"
 
 
-def get_analytical_stress(specimen: Specimen, math_param):
+def get_analytical_stress(specimen: Specimen, mat_param):
     stress_analytical = np.zeros(len(specimen.stretch))
 
-    c1, c2, c3, c4, c5 = math_param
+    c1, c2, c3 = mat_param
 
     for i in range(len(specimen.stretch)):
         if specimen.stretch[i] == 0:
@@ -73,24 +75,20 @@ def get_analytical_stress(specimen: Specimen, math_param):
         )
 
         B = F * F.T
+        
         I4l = specimen.stretch[i] ** 2
-        I4c = 1 / specimen.stretch[i]
-
-        if I4l < 1:
-            I4l = 1
-        if I4c < 1:
-            I4c = 1
 
         L = np.array([[1, 0, 0], [0, 0, 0], [0, 0, 0]])
         T = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
 
-        s = (
-            2 * c1 * B
-            + 4 * c2 * c3 * (I4l - 1) * np.exp(c3 * (I4l - 1) ** 2) * F * L * F.T
-            + 4 * c4 * c5 * (I4c - 1) * np.exp(c5 * (I4c - 1) ** 2) * F * T * F.T
+        P = (
+            2 * c1 * F
+            + 4 * c2 * c3 * (I4l - 1) * np.exp(c3 * (I4l - 1) ** 2) * F * L
         )
 
-        stress_analytical[i] = s[0, 0]
+        p=2*c1/specimen.stretch[i]
+
+        stress_analytical[i] = P[0, 0]-p
 
     return stress_analytical
 
@@ -98,9 +96,13 @@ def get_analytical_stress(specimen: Specimen, math_param):
 iter = 0
 
 
-def objective_function(math_param):
-    stress_long = get_analytical_stress(specimens[0], math_param)
-    stress_circ = get_analytical_stress(specimens[1], math_param)
+def objective_function(mat_param):
+    mat1 = [mat_param[0], mat_param[1], mat_param[2]]   
+    mat2 = [mat_param[0], mat_param[3], mat_param[4]]
+
+    stress_long = get_analytical_stress(specimens[0], mat1)
+    stress_circ = get_analytical_stress(specimens[1], mat2)
+
     error = np.sqrt(np.sum((stress_circ - specimens[1].stress) ** 2)) / len(
         specimens[1].stress
     )
@@ -109,34 +111,125 @@ def objective_function(math_param):
     )
     global iter
     iter += 1
-    print(error, iter)
+    print(f"iter: {iter} error: {error}")
+    print(mat_param)
+    print("=====================")
     return error
 
 
-initial_guess = [2.901e06, 2.039e08, 5.167e-01, 1.931e00, 5.685e-07]
-# initial_guess = [1.847e01, 2.094e06, -1.732e-05, 1.730e-03, -2.339e-08]
-# initial_guess =  [ 3.046e+01,  9.245e+05, -2.311e-05,  -6.247e-04, -8.629e-9]
-# result = minimize(
-#     objective_function,
-#     initial_guess,
-#     method="Nelder-Mead",
-#     tol=1e-12,
-#     options={"maxiter": 250, "disp": True},
-# )
-# print(result)
 
-# get_analytical_stress(specimens[1], initial_guess)
+initial_guess = [2e09,  3e8, -2.5,  3.2e8, -2.5] # takes 1200 function evaluations
+# initial_guess = [ 2.01808154e+09,  3.06665660e+08, -2.64567377e+00,  3.24740363e+08, -2.50634237e+00] # takes 520 function evaluations
 
-plt.figure()
+result = minimize(
+    objective_function,
+    initial_guess,
+    method="Nelder-Mead",
+    tol=1e-6,
+    options={"maxiter": 2500, "disp": True},
+    bounds=[(0,None), (0,None), (None,None), (0,None), (None,None)]
+)
+print(result)
+final_guess = result.x
+
+plt.figure(1)
 plt.plot(
     specimens[0].stretch,
-    get_analytical_stress(specimens[0], initial_guess),
-    label="Stress",
+    get_analytical_stress(specimens[0], final_guess[:3]),
+    label="After fitting",
 )
 plt.plot(
-    specimens[0].stretch, specimens[0].stress, label="Original Stress"
+    specimens[0].stretch,
+    get_analytical_stress(specimens[0], initial_guess[:3]),
+    label="Initial Guess",
+)
+plt.plot(
+    specimens[0].stretch, specimens[0].stress, label="Experimental Stress"
+)
+plt.xlabel("Stretch")
+plt.ylabel("Stress")
+plt.legend()
+plt.xlim(1, max(specimens[0].stretch))
+plt.title("Specimen 1")
+
+plt.figure(2)
+plt.plot(
+    specimens[1].stretch,
+    get_analytical_stress(specimens[1], [final_guess[0],final_guess[-2], final_guess[-1]]),
+    label="After fitting",
+)
+plt.plot(
+    specimens[1].stretch,
+    get_analytical_stress(specimens[1], [initial_guess[0],initial_guess[-2], initial_guess[-1]]),
+    label="Initial Guess",
+)
+plt.plot(
+    specimens[1].stretch, specimens[1].stress, label="Experimenta Stress"
 )  # Original plot
 plt.xlabel("Stretch")
 plt.ylabel("Stress")
 plt.legend()
+plt.xlim(1, max(specimens[1].stretch))
+plt.title("Specimen 2")
+
+plt.figure(3)
+for i in range(3):
+    new_final_guess = [final_guess[0]+0.01*(i-1)*final_guess[0],final_guess[1],final_guess[2],final_guess[3],final_guess[4]]
+
+    corr, _ = pearsonr(specimens[1].stretch, get_analytical_stress(specimens[1], [new_final_guess[0],new_final_guess[-2], new_final_guess[-1]]))
+    
+    plt.plot(
+        specimens[1].stretch,
+        get_analytical_stress(specimens[1], [new_final_guess[0],new_final_guess[-2], new_final_guess[-1]]),
+        label="c1 = {:.2f}".format(new_final_guess[0]/10**8)+'e8'+', pearson_r = {:.3f}'.format(corr)
+    )
+ 
+
+plt.xlim(1, max(specimens[1].stretch))
+plt.legend()
+plt.xticks(fontsize=12)
+plt.yticks(fontsize=12)
+plt.xlabel("Stretch", fontsize=12)
+plt.ylabel("Stress", fontsize=12)
+plt.title("Sensitivity Analysis of c1")
+
+
+plt.figure(4)
+for i in range(3):
+    new_final_guess = [final_guess[0],final_guess[1],final_guess[2],final_guess[3]+0.01*(i-1)*final_guess[3],final_guess[4]]
+
+    corr, _ = pearsonr(specimens[1].stretch, get_analytical_stress(specimens[1], [new_final_guess[0],new_final_guess[-2], new_final_guess[-1]]))
+
+    plt.plot(
+        specimens[1].stretch,
+        get_analytical_stress(specimens[1], [new_final_guess[0],new_final_guess[-2], new_final_guess[-1]]),
+        label="c4 = {:.2f}".format(new_final_guess[3]/10**7)+'e7'+', pearson_r = {:.3f}'.format(corr)
+    )
+plt.xlim(1, max(specimens[1].stretch))
+plt.legend()
+plt.xticks(fontsize=12)
+plt.yticks(fontsize=12)
+plt.xlabel("Stretch", fontsize=12)
+plt.ylabel("Stress", fontsize=12)
+plt.title("Sensitivity Analysis of c4")
+
+plt.figure(5)
+for i in range(3):
+    new_final_guess = [final_guess[0],final_guess[1],final_guess[2],final_guess[3],final_guess[4]+0.01*(i-1)*final_guess[4]]
+
+    corr, _ = pearsonr(specimens[1].stretch, get_analytical_stress(specimens[1], [new_final_guess[0],new_final_guess[-2], new_final_guess[-1]]))
+    
+    plt.plot(
+        specimens[1].stretch,
+        get_analytical_stress(specimens[1], [new_final_guess[0],new_final_guess[-2], new_final_guess[-1]]),
+        label="c5 = {:.2f}".format(new_final_guess[4])+ ', pearson_r = {:.3f}'.format(corr)
+    )
+plt.xlim(1, max(specimens[1].stretch))
+plt.legend()
+plt.xticks(fontsize=12)
+plt.yticks(fontsize=12)
+plt.xlabel("Stretch", fontsize=12)
+plt.ylabel("Stress", fontsize=12)
+plt.title("Sensitivity Analysis of c5")
+
 plt.show()
